@@ -1,0 +1,138 @@
+// App.js
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { View, Text, Button, StyleSheet, Image, FlatList, TouchableOpacity } from 'react-native';
+import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { Camera } from 'expo-camera';
+import * as Brightness from 'expo-brightness';
+import * as Contacts from 'expo-contacts';
+
+const Stack = createNativeStackNavigator();
+const Overlay = () => <View style={styles.overlay}><View style={styles.frame} /></View>;
+
+const HomeScreen = ({ navigation }) => (
+  <View style={styles.center}>
+    <Button title="Start Scan" onPress={() => navigation.navigate('Camera')} />
+  </View>
+);
+
+const CameraScreen = ({ navigation }) => {
+  const ref = useRef(null);
+  const [type, setType] = useState(Camera.Constants.Type.front);
+  const [permission, requestPermission] = Camera.useCameraPermissions();
+  const [selfie, setSelfie] = useState(), [doc, setDoc] = useState();
+  const [prevBrightness, setPrev] = useState();
+
+  useFocusEffect(useCallback(() => {
+    const adjust = async () => {
+      if (type === Camera.Constants.Type.front) {
+        const cur = await Brightness.getBrightnessAsync();
+        setPrev(cur); await Brightness.setBrightnessAsync(1);
+      }
+    };
+    adjust();
+    return () => prevBrightness && Brightness.setBrightnessAsync(prevBrightness);
+  }, [type]));
+
+  const snap = async () => {
+    const photo = await ref.current?.takePictureAsync();
+    if (photo) {
+      type === Camera.Constants.Type.front ? (setSelfie(photo.uri), setType(Camera.Constants.Type.back)) : setDoc(photo.uri);
+    }
+  };
+
+  if (!permission?.granted) return <View style={styles.center}><Button title="Grant Camera Access" onPress={requestPermission} /></View>;
+
+  return (
+    <View style={{ flex: 1 }}>
+      <Camera ref={ref} style={styles.camera} type={type}><Overlay /></Camera>
+      <View style={styles.controls}>
+        <Button title="Switch" onPress={() => setType(t => t === Camera.Constants.Type.back ? Camera.Constants.Type.front : Camera.Constants.Type.back)} />
+        <Button title="Capture" onPress={snap} />
+        <Button title="Next" onPress={() => navigation.navigate('Contacts', { selfie, doc, time: new Date().toISOString() })} disabled={!selfie || !doc} />
+      </View>
+    </View>
+  );
+};
+
+const ContactSelectionScreen = ({ navigation, route }) => {
+  const [contacts, setContacts] = useState([]), [selected, setSelected] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status === 'granted') {
+        const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers] });
+        setContacts(data.filter(c => c.phoneNumbers?.length));
+      }
+    })();
+  }, []);
+
+  const toggle = id =>
+    setSelected(s => s.includes(id) ? s.filter(x => x !== id) : s.length < 2 ? [...s, id] : s);
+
+  return (
+    <View style={{ flex: 1, padding: 10 }}>
+      <Text style={styles.heading}>Select 2 Contacts</Text>
+      <FlatList
+        data={contacts}
+        keyExtractor={c => c.id}
+        renderItem={({ item }) => (
+          <TouchableOpacity onPress={() => toggle(item.id)} style={[styles.contactButton, selected.includes(item.id) && styles.contactSelected]}>
+            <Text>{item.name} - {item.phoneNumbers[0]?.number}</Text>
+          </TouchableOpacity>
+        )}
+      />
+      <Button
+        title="Confirm"
+        disabled={selected.length !== 2}
+        onPress={() => navigation.navigate('Summary', {
+          ...route.params,
+          contacts: contacts.filter(c => selected.includes(c.id))
+        })}
+      />
+    </View>
+  );
+};
+
+const SummaryScreen = ({ route, navigation }) => {
+  const { selfie, doc, time, contacts } = route.params;
+  return (
+    <View style={styles.summary}>
+      <Text style={styles.heading}>Summary</Text>
+      <Image source={{ uri: selfie }} style={styles.image} />
+      <Image source={{ uri: doc }} style={styles.image} />
+      <Text>Time: {new Date(time).toLocaleString()}</Text>
+      {contacts.map((c, i) => (
+        <Text key={i}>{c.name} - {c.phoneNumbers[0]?.number}</Text>
+      ))}
+      <Button title="Start Over" onPress={() => navigation.navigate('Home')} />
+    </View>
+  );
+};
+
+export default function App() {
+  return (
+    <NavigationContainer>
+      <Stack.Navigator initialRouteName="Home" screenOptions={{ headerTitleAlign: 'center' }}>
+        <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="Camera" component={CameraScreen} />
+        <Stack.Screen name="Contacts" component={ContactSelectionScreen} />
+        <Stack.Screen name="Summary" component={SummaryScreen} />
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+
+const styles = StyleSheet.create({
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  camera: { flex: 5 },
+  controls: { flexDirection: 'row', justifyContent: 'space-around', padding: 10 },
+  overlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  frame: { width: 250, height: 150, borderColor: 'white', borderWidth: 2 },
+  heading: { fontSize: 18, fontWeight: 'bold', marginVertical: 10 },
+  contactButton: { padding: 10, marginVertical: 5, backgroundColor: '#eee', borderRadius: 5 },
+  contactSelected: { backgroundColor: '#cce5ff' },
+  summary: { flex: 1, alignItems: 'center', padding: 20 },
+  image: { width: 200, height: 150, marginVertical: 10, borderRadius: 10 }
+});
